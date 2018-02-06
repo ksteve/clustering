@@ -1,7 +1,3 @@
-# Author: Peter Prettenhofer <peter.prettenhofer@gmail.com>
-#         Lars Buitinck
-# License: BSD 3 clause
-
 import lda
 import json
 import logging
@@ -9,7 +5,6 @@ import sys
 import nltk
 import numpy as np
 import os.path
-
 
 from newsapi import NewsApiClient
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -20,13 +15,10 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.manifold import TSNE
 from sklearn.externals import joblib
 from nltk.stem.porter import PorterStemmer
-from newspaper import Article
+from newspaper import Article as Extractor
 from optparse import OptionParser
 from time import time
 import itertools
-
-stemmer = PorterStemmer()
-
 
 def stem_tokens(tokens, stemmer):
     stemmed = []
@@ -39,114 +31,81 @@ def tokenize(text):
     stems = stem_tokens(tokens, stemmer)
     return stems
 
-
 def jaccard(vector):
     #
     sims = cosine_similarity(vector)
-    print(sims)
-    for i, x in enumerate(sims[0]):
-        if x < 1.0 and x > 0.0:
-            print(articles[i]['title'])
-  
+    return sims
 
+#init
 
-
+timelines = []
+stemmer = PorterStemmer()
 newsapi = NewsApiClient(api_key='1f62f144d9584aaeb3fb553f42c989a6')
-top_headlines = newsapi.get_top_headlines(language='en', q="Trump")
 
-#print(top_headlines)
-headlines = top_headlines['articles']
-urls = [*map(lambda x: x['url'], headlines)]
-urls = [*filter(None, urls)][:10]
+if os.path.exists('./timelines.pkl'):
+    joblib.load('./timelines.pkl', timelines)
 
+#start
 
+top_headlines = newsapi.get_top_headlines(language='en')
 
+#get urls from news api
+urls = [*filter(None,[*map(lambda x: x['url'], top_headlines['articles'])])]
+
+# extract from article urls
 articles = []
 for u in urls:
     try:
-        article = Article(u)
-        article.download()
-        article.parse()
-        article.nlp()
-        blah = {}
-        blah['title'] = article.title
-        stemmed_words = set(stem_tokens(article.keywords, stemmer))
-        blah['keywords'] = ' '.join(sorted(stemmed_words))
-        articles.append(blah)
+        content = Extractor(u)
+        content.download()
+        content.parse()
+        content.nlp()
+        article = {}
+        article['title'] = content.title
+        article['url'] = u
+        stemmed_words = set(stem_tokens(content.keywords, stemmer))
+        article['keywords'] = ' '.join(sorted(stemmed_words))
+        articles.append(article)
     except:
         continue
 
+#add existing articles to new articles
+if len(timelines) > 0:
+    recent_timelines = [*map(lambda t: t[0], timelines)]
+    articles = recent_timelines + articles
 
-
+#tf-idf the articles
 vectorizer = TfidfVectorizer(stop_words='english')
 X = vectorizer.fit_transform([*map(lambda x: x['keywords'],articles)])
-jaccard(X)
 
-#cvectorizer = CountVectorizer(min_df=0.1, stop_words='english')
-#cvz = cvectorizer.fit_transform(articles)
+#jaccard similarity on vector
+sims = jaccard(X)
 
-svd = TruncatedSVD(random_state=0)
-svd_tfidf = svd.fit_transform(X)
+#
+new_timelines = set()
+test = {}
+for i, y in enumerate(sims):
+    tm = []
+    #print(articles[i]['title'])
+    #print()
+    #print()
+    for idx, x in enumerate(y):
+        if idx != i and x >= 0.1:
+            tm.append(idx)
+            #print(articles[idx]['title'])
+    #print(tm)
+    test[i] = tm
 
-#tsne_model = TSNE(n_components=2, verbose=1, random_state=0)
-#tsne_tfidf = tsne_model.fit_transform(svd_tfidf)
+    #new_timelines.add(frozenset(tm))
+    #print('---------------------------------')
+    #print()
+    #print()
+print(test)
+print()
 
-#if os.path.exists('./clusters.pkl'):
-#    model = joblib.load('clusters.pkl')
-#    model.fit_predict(X)
-#else:
-true_k = 3
-model = KMeans(n_clusters=true_k)
-#model = DBSCAN(metric='cosine')
-#model = AffinityPropagation(preference=-10)
-model.fit(X)
+#print(new_timelines)
 
-clusters = model.labels_.tolist()
-#joblib.dump(model, 'clusters.pkl')
 
-''' cvectorizer = CountVectorizer(min_df=0.1, max_features=10000, ngram_range=(1,2), stop_words='english')
-cvz = cvectorizer.fit_transform(descriptions)
+# #joblib.dump(model, 'clusters.pkl')
 
-n_topics = 20
-n_iter = 2000
-lda_model = lda.LDA(n_topics=n_topics, n_iter=n_iter)
-X_topics = lda_model.fit_transform(cvz)
-
-n_top_words = 8
-topic_summaries = []
-
-topic_word = lda_model.topic_word_  # get the topic words
-vocab = cvectorizer.get_feature_names()
-for i, topic_dist in enumerate(topic_word):
-    topic_words = np.array(vocab)[np.argsort(topic_dist)][:-(n_top_words+1):-1]
-    topic_summaries.append(' '.join(topic_words))
-    print('Topic {}: {}'.format(i, ' '.join(topic_words)))
-
-tsne_lda = tsne_model.fit_transform(X_topics) '''
-
-print("Top terms per cluster:")
-#order_centroids = af.cluster_centers_.argsort()[:, ::-1]
-terms = vectorizer.get_feature_names()
-
-for i in range(model.n_clusters):
-    print("Cluster %d:" % (i+1))
-    for z in range(len(clusters)):    
-        if clusters[z] == i:
-            print(articles[z]['title'])
-            print()
-            print()
-    print()
- #   for ind in order_centroids[i, :10]:
-#        print(' %s' % terms[ind])
-
-print("\n")
-print("Prediction")
-
-# Y = vectorizer.transform(["chrome browser to open."])
-# prediction = model.predict(Y)
-# print(prediction)
-
-# Y = vectorizer.transform(["My cat is hungry."])
-# prediction = model.predict(Y)
-# print(prediction)
 
