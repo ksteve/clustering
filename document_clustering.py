@@ -5,6 +5,7 @@ import sys
 import nltk
 import numpy as np
 import os.path
+import sqlite3
 
 from newsapi import NewsApiClient
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -45,6 +46,12 @@ def jaccard(vector):
     sims = cosine_similarity(vector)
     return sims
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
 #init
 #opener = urllib2.build_opener(urllib2.HTTPCookieProcessor())
 g = Goose()
@@ -53,65 +60,32 @@ stemmer = PorterStemmer()
 newsapi = NewsApiClient(api_key='1f62f144d9584aaeb3fb553f42c989a6')
 translator = str.maketrans('', '', string.punctuation)
 
-if os.path.exists('./timelines.pkl'):
-    joblib.load('./timelines.pkl', timelines)
 
-#start
-#,abc-news,buzzfeed,daily-mail,bbc-news,cbc-news,cnn
-top_headlines = newsapi.get_top_headlines(language='en', sources='google-news', page_size=100)
-
-#get urls from news api
-urls = [*filter(None,[*map(lambda x: x['url'], top_headlines['articles'])])]
-
-# extract from article urls
-articles = []
-for u in urls:
-    try:
-      #  response = opener.open(u)
-      #  raw_html = response.read()
-        #content = Extractor(u)
-        content = g.extract(url=u)
-        #text = content.cleaned_text.lower()
-        text = content.cleaned_text.replace("\n", " ")
-        #no_punc = text.translate(translator)
-
-        #content.download()
-        #content.parse()
-        #content.nlp()
-        article = {}
-
-       # stemmed_words = set(stem_tokens(content.cleaned_text, stemmer))
-        article['keywords'] = text
-        article['url'] = u
-        article['title'] = content.title
-        articles.append(article)
-    except:
-        continue
-
-for a in articles:
-    print(a['url'])
-
-#add existing articles to new articles
-if len(timelines) > 0:
-    recent_timelines = [*map(lambda t: t[0], timelines)]
-    articles = recent_timelines + articles
-
+con = sqlite3.connect("top_headlines.db")
+con.row_factory = dict_factory
+cur = con.cursor()
+cur.execute("select * from headlines")
+results = cur.fetchall()
 
 #tf-idf the articles
 vectorizer = TfidfVectorizer(stop_words='english', ngram_range=(1, 3))
-X = vectorizer.fit_transform([*map(lambda x: x['keywords'],articles)])
+X = vectorizer.fit_transform([*map(lambda x: x['text'],results)])
+
+for item in X[0]:
+    print(item)
+    
 #print(vectorizer.get_feature_names())
 
 svd = TruncatedSVD(n_components=100, n_iter=100)
-lda = LatentDirichletAllocation(n_components=len(articles))
+lda = LatentDirichletAllocation(n_components=10)
 L = lda.fit(X)
-X = svd.fit(X)
+S = svd.fit(X)
 #normalizer = Normalizer(copy=False)
 #lsa = make_pipeline(svd, normalizer)
 #X = lsa.fit_transform(X)
 
 terms = vectorizer.get_feature_names()
-for i, comp in enumerate(L.components_):
+for i, comp in enumerate(S.components_):
     termsInComp = zip(terms,comp)
     sortedTerms = sorted(termsInComp, key=lambda x: x[1], reverse=True)[:20]
     print("Concept %d:" % i)
